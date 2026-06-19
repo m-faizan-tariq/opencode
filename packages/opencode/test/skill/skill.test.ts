@@ -838,3 +838,189 @@ description: A skill for preview.
     ),
   )
 })
+
+describe("bundle-aware skill filtering", () => {
+  it.live("filters sub-skills from available() but keeps bundle and standalone", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "SKILL.md"),
+                `---
+name: bundle
+type: core
+description: A bundle dispatcher.
+---
+
+# Bundle
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "sub-skill", "SKILL.md"),
+                `---
+name: sub-skill
+type: non-core
+description: A sub-skill inside a bundle.
+---
+
+# Sub Skill
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "standalone", "SKILL.md"),
+                `---
+name: standalone
+type: non-core
+description: A standalone top-level skill.
+---
+
+# Standalone
+`,
+              ),
+            ]),
+          )
+
+          const skill = yield* Skill.Service
+          const avail = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
+          expect(avail.find((s) => s.name === "bundle")).toBeDefined()
+          expect(avail.find((s) => s.name === "sub-skill")).toBeUndefined()
+          expect(avail.find((s) => s.name === "standalone")).toBeDefined()
+
+          const metas = yield* scanAvailableSkills()
+          expect(metas.find((m) => m.name === "bundle")).toBeDefined()
+          expect(metas.find((m) => m.name === "sub-skill")).toBeUndefined()
+          expect(metas.find((m) => m.name === "standalone")).toBeDefined()
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("all() returns full list including sub-skills", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "SKILL.md"),
+                `---
+name: bundle
+type: core
+description: A bundle dispatcher.
+---
+
+# Bundle
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "sub-skill", "SKILL.md"),
+                `---
+name: sub-skill
+type: non-core
+description: A sub-skill inside a bundle.
+---
+
+# Sub Skill
+`,
+              ),
+            ]),
+          )
+
+          const skill = yield* Skill.Service
+          const all = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(all.length).toBe(2)
+          expect(all.find((s) => s.name === "bundle")).toBeDefined()
+          expect(all.find((s) => s.name === "sub-skill")).toBeDefined()
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("require() works for sub-skills by name", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "SKILL.md"),
+                `---
+name: bundle
+type: core
+description: A bundle dispatcher.
+---
+
+# Bundle
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "sub-skill", "SKILL.md"),
+                `---
+name: sub-skill
+type: non-core
+description: A sub-skill inside a bundle.
+---
+
+# Sub Skill Content
+`,
+              ),
+            ]),
+          )
+
+          const skill = yield* Skill.Service
+          const info = yield* skill.require("sub-skill")
+          expect(info.name).toBe("sub-skill")
+          expect(info.content).toContain("Sub Skill Content")
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("loadIntoSession works for sub-skills excluded from available()", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "SKILL.md"),
+                `---
+name: bundle
+type: core
+description: A bundle dispatcher.
+---
+
+# Bundle
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".opencode", "skill", "bundle", "sub-skill", "SKILL.md"),
+                `---
+name: sub-skill
+type: non-core
+description: A sub-skill inside a bundle.
+---
+
+# Sub Skill Content
+`,
+              ),
+            ]),
+          )
+
+          const skill = yield* Skill.Service
+
+          const avail = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
+          expect(avail.find((s) => s.name === "sub-skill")).toBeUndefined()
+
+          const content = yield* skill.loadIntoSession("sub-skill")
+          expect(content).toContain("Sub Skill Content")
+
+          const loaded = yield* skill.isLoaded("sub-skill")
+          expect(loaded).toBe(true)
+        }),
+      { git: true },
+    ),
+  )
+})
