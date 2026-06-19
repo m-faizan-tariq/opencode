@@ -327,7 +327,12 @@ const layer = Layer.effect(
 
     const available = Effect.fn("Skill.available")(function* (agent?: Agent.Info) {
       const s = yield* InstanceState.get(state)
-      const list = Object.values(s.skills).toSorted((a, b) => a.name.localeCompare(b.name))
+      const skills = Object.values(s.skills)
+      const dirs = new Set(skills.map(skill => path.dirname(skill.location)))
+      const list = skills.filter(skill => {
+        const skillDir = path.dirname(skill.location)
+        return !Array.from(dirs).some(otherDir => otherDir !== skillDir && skillDir.startsWith(otherDir + path.sep))
+      }).toSorted((a, b) => a.name.localeCompare(b.name))
       if (!agent) return list
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
