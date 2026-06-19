@@ -5,6 +5,9 @@
 ### Added
 
 - `type: core | non-core` frontmatter field for SKILL.md files
+- Bundle-aware listing: `/skills` and `GET /skills` only show top-level
+  skills (directories with their own `SKILL.md`); nested sub-skills are
+  internal to their bundle and not listed separately
 - `skills.autoLoad` config option: `"all"` | `"core"` | `"none"` (default: `"all"`)
 - Skill scanner: `scanAvailableSkills()` returning typed metadata
 - Skill loader: `loadSkillContent()` for session-scoped preview
