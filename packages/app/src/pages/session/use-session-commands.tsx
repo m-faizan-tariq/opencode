@@ -140,6 +140,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const viewCommand = withCategory(language.t("command.category.view"))
   const terminalCommand = withCategory(language.t("command.category.terminal"))
   const mcpCommand = withCategory(language.t("command.category.mcp"))
+  const agentCommand = withCategory(language.t("command.category.agent"))
+  const skillsCommand = withCategory(language.t("command.category.skills"))
   const permissionsCommand = withCategory(language.t("command.category.permissions"))
 
   const isAutoAcceptActive = () => {
@@ -631,6 +633,39 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
+  const skillsCmds = () => [
+    skillsCommand({
+      id: "skills.picker",
+      title: language.t("command.skills.picker"),
+      description: language.t("command.skills.picker.description"),
+      slash: "skills",
+      onSelect: () => {
+        void import("@/components/skill-picker").then((x) => {
+          dialog.show(() => <x.SkillPicker />)
+        })
+      },
+    }),
+  ]
+
+  const agentCmds = () => [
+    agentCommand({
+      id: "agent.cycle",
+      title: language.t("command.agent.cycle"),
+      description: language.t("command.agent.cycle.description"),
+      keybind: "mod+.",
+      slash: "agent",
+      disabled: !settings.visibility.customAgents(),
+      onSelect: () => local.agent.move(1),
+    }),
+    agentCommand({
+      id: "agent.cycle.reverse",
+      title: language.t("command.agent.cycle.reverse"),
+      description: language.t("command.agent.cycle.reverse.description"),
+      keybind: "shift+mod+.",
+      disabled: !settings.visibility.customAgents(),
+      onSelect: () => local.agent.move(-1),
+    }),
+  ]
   const permissionsCmds = () => [
     permissionsCommand({
       id: "permissions.autoaccept",
@@ -652,6 +687,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     ...terminalCmds(),
     ...messageCmds(),
     ...mcpCmds(),
+    ...skillsCmds(),
+    ...agentCmds(),
     ...permissionsCmds(),
   ])
 }
