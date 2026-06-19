@@ -16,6 +16,7 @@ import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
+import { Config } from "@/config/config"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
@@ -52,6 +53,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const mcp = yield* MCP.Service
+    const config = yield* Config.Service
     const locations = yield* LocationServiceMap
 
     return Service.of({
@@ -96,7 +98,15 @@ export const layer = Layer.effect(
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return
 
-        const list = yield* skill.available(agent)
+        let list = yield* skill.available(agent)
+        const cfg = yield* config.get()
+        const autoLoad = cfg.skills?.autoLoad ?? "all"
+
+        if (autoLoad === "core") {
+          list = list.filter((s) => s.type === "core")
+        } else if (autoLoad === "none") {
+          list = []
+        }
 
         return [
           "Skills provide specialized instructions and workflows for specific tasks.",
@@ -131,6 +141,7 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(Skill.defaultLayer),
   Layer.provide(MCP.defaultLayer),
+  Layer.provide(Config.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
 )
 
@@ -139,7 +150,7 @@ const locationServiceMapNode = LayerNode.make({ service: Service, layer: Locatio
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Skill.node, MCP.node, locationServiceMapNode],
+  deps: [Skill.node, MCP.node, Config.node, locationServiceMapNode],
 })
 
 export * as SystemPrompt from "./system"
