@@ -158,6 +158,14 @@ description: Does X
 ---
 ```
 
+#### Bundle-aware listing
+
+The `/skills` picker and skill scanner only list top-level skills — a
+directory that contains its own `SKILL.md` is a skill. Nested sub-skills
+(`SKILL.md` files inside another skill's directory) do **not** appear
+individually. They are internal to their parent bundle and loaded by the
+bundle's dispatcher. Bundle functionality is unchanged.
+
 ### Contributing
 
 If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.

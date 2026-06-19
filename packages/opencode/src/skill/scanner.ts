@@ -11,7 +11,7 @@ export interface SkillMeta {
 
 export const scanAvailableSkills = Effect.fn("SkillScanner.scanAvailable")(function* () {
   const skill = yield* Skill.Service
-  const items = yield* skill.all()
+  const items = yield* skill.available()
   const metas: SkillMeta[] = []
 
   for (const item of items) {

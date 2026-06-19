@@ -36,6 +36,10 @@ to browse or selectively load a single skill mid-session. The only workaround
 ### Positive
 
 - Context window used only for skills relevant to the current task
+- Bundle-aware listing: only top-level skills (directories with their own
+  `SKILL.md`) appear in `/skills` and `GET /skills`; nested sub-skills
+  are internal to their bundle and invisible at the listing level —
+  refinement of the initial listing behaviour
 - Users can discover skills they didn't know existed via the picker
 - Backward compatible — existing users see zero behaviour change
 - Core skills (engineering workflow) auto-load; domain skills on demand
