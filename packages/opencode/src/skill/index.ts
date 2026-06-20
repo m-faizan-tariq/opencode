@@ -160,12 +160,14 @@ const scan = Effect.fnUntraced(function* (
   state: ScanState,
   root: string,
   pattern: string,
+  fsys: FSUtil.Interface,
   opts?: { dot?: boolean; scope?: string },
 ) {
+  const realRoot = yield* fsys.realPath(root).pipe(Effect.catch(() => Effect.succeed(root)))
   const matches = yield* Effect.tryPromise({
     try: () =>
       Glob.scan(pattern, {
-        cwd: root,
+        cwd: realRoot,
         absolute: true,
         include: "file",
         symlink: true,
@@ -182,8 +184,9 @@ const scan = Effect.fnUntraced(function* (
   )
 
   for (const match of matches) {
-    state.matches.add(match)
-    state.dirs.add(path.dirname(match))
+    const realMatch = yield* fsys.realPath(match).pipe(Effect.catch(() => Effect.succeed(match)))
+    state.matches.add(realMatch)
+    state.dirs.add(path.dirname(realMatch))
   }
 })
 
@@ -207,7 +210,7 @@ const discoverSkills = Effect.fnUntraced(function* (
     for (const dir of externalDirs) {
       const root = path.join(global.home, dir)
       if (!(yield* fsys.isDir(root))) continue
-      yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "global" })
+      yield* scan(state, root, EXTERNAL_SKILL_PATTERN, fsys, { dot: true, scope: "global" })
     }
 
     const upDirs = yield* fsys
@@ -215,13 +218,13 @@ const discoverSkills = Effect.fnUntraced(function* (
       .pipe(Effect.catch(() => Effect.succeed([] as string[])))
 
     for (const root of upDirs) {
-      yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "project" })
+      yield* scan(state, root, EXTERNAL_SKILL_PATTERN, fsys, { dot: true, scope: "project" })
     }
   }
 
   const configDirs = yield* config.directories()
   for (const dir of configDirs) {
-    yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
+    yield* scan(state, dir, OPENCODE_SKILL_PATTERN, fsys)
   }
 
   const cfg = yield* config.get()
@@ -233,13 +236,13 @@ const discoverSkills = Effect.fnUntraced(function* (
       continue
     }
 
-    yield* scan(state, dir, SKILL_PATTERN)
+    yield* scan(state, dir, SKILL_PATTERN, fsys)
   }
 
   for (const url of cfg.skills?.urls ?? []) {
     const pulledDirs = yield* discovery.pull(url)
     for (const dir of pulledDirs) {
-      yield* scan(state, dir, SKILL_PATTERN)
+      yield* scan(state, dir, SKILL_PATTERN, fsys)
     }
   }
 
