@@ -84,6 +84,8 @@ function makeLayer(skillsConfig?: { autoLoad?: "all" | "core" | "none" }) {
           available: () => Effect.succeed(skills),
           loadIntoSession: () => Effect.succeed(""),
           isLoaded: () => Effect.succeed(false),
+          installFromDirectory: () => Effect.die("unimplemented"),
+          installFromGitHub: () => Effect.die("unimplemented"),
         }),
       ),
     ),
