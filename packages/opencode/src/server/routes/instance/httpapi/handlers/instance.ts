@@ -82,7 +82,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getSkill = Effect.fn("InstanceHttpApi.skill")(function* () {
-      return yield* skill.all()
+      return yield* skill.available()
     })
 
     const getLsp = Effect.fn("InstanceHttpApi.lsp")(function* () {
