@@ -15,6 +15,7 @@ import { ConfigMarkdown } from "@/config/markdown"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
+import { Installer } from "./installer"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
 
@@ -107,6 +108,14 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
   readonly loadIntoSession: (name: string) => Effect.Effect<string, NotFoundError>
   readonly isLoaded: (name: string) => Effect.Effect<boolean>
+  readonly installFromDirectory: (
+    srcPath: string,
+    opts?: { name?: string; type?: "core" | "non-core"; overwrite?: boolean },
+  ) => Effect.Effect<Installer.InstallResult, Installer.InstallError | Installer.InvalidStructureError>
+  readonly installFromGitHub: (
+    url: string,
+    opts?: { name?: string; type?: "core" | "non-core"; overwrite?: boolean },
+  ) => Effect.Effect<Installer.InstallResult, Installer.InstallError | Installer.InvalidStructureError>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -353,7 +362,24 @@ export const layer = Layer.effect(
       return s.loadedSkills.has(name)
     })
 
-    return Service.of({ get, require, all, dirs, available, loadIntoSession, isLoaded })
+    const installFromDirectory = Effect.fn("Skill.installFromDirectory")(function* (
+      srcPath: string,
+      opts?: { name?: string; type?: "core" | "non-core"; overwrite?: boolean },
+    ) {
+      return yield* Installer.installFromDirectory(srcPath, { fsys, global }, opts)
+    })
+
+    const installFromGitHub = Effect.fn("Skill.installFromGitHub")(function* (
+      url: string,
+      opts?: { name?: string; type?: "core" | "non-core"; overwrite?: boolean },
+    ) {
+      return yield* Installer.installFromGitHub(url, { fsys, global }, opts)
+    })
+
+    return Service.of({
+      get, require, all, dirs, available, loadIntoSession, isLoaded,
+      installFromDirectory, installFromGitHub,
+    })
   }),
 )
 
