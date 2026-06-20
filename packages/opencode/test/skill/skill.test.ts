@@ -1004,7 +1004,7 @@ name: bundle
 type: core
 description: A bundle dispatcher.
 ---
-
+ 
 # Bundle
 `,
               ),
@@ -1015,25 +1015,90 @@ name: sub-skill
 type: non-core
 description: A sub-skill inside a bundle.
 ---
-
+ 
 # Sub Skill Content
 `,
               ),
             ]),
           )
-
+ 
           const skill = yield* Skill.Service
-
+ 
           const avail = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
           expect(avail.find((s) => s.name === "sub-skill")).toBeUndefined()
-
+ 
           const content = yield* skill.loadIntoSession("sub-skill")
           expect(content).toContain("Sub Skill Content")
-
+ 
           const loaded = yield* skill.isLoaded("sub-skill")
           expect(loaded).toBe(true)
         }),
       { git: true },
+    ),
+  )
+
+  it.live("handles symlinked skill roots without duplicating or exposing sub-skills", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            const realDir = path.join(dir, "real-skills")
+            const linkDir = path.join(dir, "link-skills")
+ 
+            await fs.mkdir(path.join(realDir, "bundle"), { recursive: true })
+            await fs.mkdir(path.join(realDir, "bundle", "sub"), { recursive: true })
+            await fs.mkdir(path.join(realDir, "standalone"), { recursive: true })
+ 
+            await Bun.write(
+              path.join(realDir, "bundle", "SKILL.md"),
+              `---
+name: bundle
+type: core
+description: A bundle dispatcher.
+---
+# Bundle
+`,
+            )
+            await Bun.write(
+              path.join(realDir, "bundle", "sub", "SKILL.md"),
+              `---
+name: sub
+description: A nested sub-skill.
+---
+# Sub
+`,
+            )
+            await Bun.write(
+              path.join(realDir, "standalone", "SKILL.md"),
+              `---
+name: standalone
+description: A top-level skill.
+---
+# Standalone
+`,
+            )
+ 
+            await fs.symlink(realDir, linkDir)
+          })
+ 
+          const skill = yield* Skill.Service
+          const avail = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
+ 
+          expect(avail.find((s) => s.name === "bundle")).toBeDefined()
+          expect(avail.find((s) => s.name === "sub")).toBeUndefined()
+          expect(avail.find((s) => s.name === "standalone")).toBeDefined()
+ 
+          const all = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(all.length).toBe(3)
+          expect(all.map((s) => s.name).sort()).toEqual(["bundle", "standalone", "sub"])
+ 
+          const loaded = yield* skill.loadIntoSession("sub")
+          expect(loaded).toContain("# Sub")
+        }),
+      {
+        git: true,
+        config: { skills: { paths: ["real-skills", "link-skills"] } },
+      },
     ),
   )
 })
