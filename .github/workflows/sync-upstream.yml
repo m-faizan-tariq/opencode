@@ -1,0 +1,35 @@
+name: Sync with upstream OpenCode
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 6 AM UTC
+  workflow_dispatch:       # Allow manual trigger from GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode.git || true
+          git remote -v
+
+      - name: Fetch upstream
+        run: git fetch upstream --prune --tags
+
+      - name: Sync main with upstream/dev
+        run: |
+          git checkout main
+          git reset --hard upstream/dev
+          git push origin main --force-with-lease
+
+      - name: Report sync result
+        run: |
+          echo "main is now at:"
+          git log --oneline -n 5
