@@ -9,6 +9,7 @@ import { Permission } from "../../src/permission"
 import type { Provider } from "../../src/provider/provider"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
+import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { testEffect } from "../lib/effect"
 
 const skills: Skill.Info[] = [
@@ -50,62 +51,55 @@ const build: Agent.Info = {
 
 function makeLayer(skillsConfig?: { autoLoad?: "all" | "core" | "none" }) {
   const configInfo = skillsConfig ? { skills: skillsConfig } : {}
-  return SystemPrompt.layer.pipe(
-    Layer.provide(LocationServiceMap.layer),
-    Layer.provide(
-      Layer.mock(MCP.Service, {
-        instructions: () =>
-          Effect.succeed([
-            {
-              name: "guide-server",
-              instructions: "Use lookup before mutate.",
-              tools: [],
-            },
-            {
-              name: "tool-server",
-              instructions: "Prefer search before update.",
-              tools: ["tool-server_search", "tool-server_update"],
-            },
-          ]),
-      }),
-    ],
-    [
-      Skill.node,
-      Layer.succeed(
-        Skill.Service,
-        Skill.Service.of({
-          get: (name) => Effect.succeed(skills.find((s) => s.name === name)),
-          require: (name) => {
-            const info = skills.find((s) => s.name === name)
-            if (info) return Effect.succeed(info)
-            return Effect.fail(new Skill.NotFoundError({ name, available: skills.map((s) => s.name) }))
+  return LayerNode.compile(SystemPrompt.node, [
+    [MCP.node, Layer.mock(MCP.Service, {
+      instructions: () =>
+        Effect.succeed([
+          {
+            name: "guide-server",
+            instructions: "Use lookup before mutate.",
+            tools: [],
           },
-          all: () => Effect.succeed(skills),
-          dirs: () => Effect.succeed([]),
-          available: () => Effect.succeed(skills),
-          loadIntoSession: () => Effect.succeed(""),
-          isLoaded: () => Effect.succeed(false),
-          installFromDirectory: () => Effect.die("unimplemented"),
-          installFromGitHub: () => Effect.die("unimplemented"),
-        }),
-      ),
-    ),
-    Layer.provide(
-      Layer.succeed(
-        Config.Service,
-        Config.Service.of({
-          get: () => Effect.succeed(configInfo),
-          getGlobal: () => Effect.succeed({}),
-          getConsoleState: () => Effect.succeed({ consoleManagedProviders: [], activeOrgName: undefined, switchableOrgCount: 0 }),
-          update: () => Effect.void,
-          updateGlobal: () => Effect.succeed({ info: {}, changed: false }),
-          invalidate: () => Effect.void,
-          directories: () => Effect.succeed([]),
-          waitForDependencies: () => Effect.void,
-        }),
-      ),
-    ),
-  )
+          {
+            name: "tool-server",
+            instructions: "Prefer search before update.",
+            tools: ["tool-server_search", "tool-server_update"],
+          },
+        ]),
+    })],
+    [Skill.node, Layer.succeed(
+      Skill.Service,
+      Skill.Service.of({
+        get: (name) => Effect.succeed(skills.find((s) => s.name === name)),
+        require: (name) => {
+          const info = skills.find((s) => s.name === name)
+          if (info) return Effect.succeed(info)
+          return Effect.fail(new Skill.NotFoundError({ name, available: skills.map((s) => s.name) }))
+        },
+        all: () => Effect.succeed(skills),
+        dirs: () => Effect.succeed([]),
+        available: () => Effect.succeed(skills),
+        loadIntoSession: () => Effect.succeed(""),
+        isLoaded: () => Effect.succeed(false),
+        installFromDirectory: () => Effect.die("unimplemented"),
+        installFromGitHub: () => Effect.die("unimplemented"),
+      }),
+    )],
+    [Config.node, Layer.succeed(
+      Config.Service,
+      Config.Service.of({
+        get: () => Effect.succeed(configInfo),
+        getGlobal: () => Effect.succeed({}),
+        getConsoleState: () => Effect.succeed({ consoleManagedProviders: [], activeOrgName: undefined, switchableOrgCount: 0 }),
+        update: () => Effect.void,
+        updateGlobal: () => Effect.succeed({ info: {}, changed: false }),
+        invalidate: () => Effect.void,
+        directories: () => Effect.succeed([]),
+        waitForDependencies: () => Effect.void,
+      }),
+    )],
+    [LocationServiceMap.node, locationServiceMapLayer],
+  ])
 }
 
 const it = testEffect(makeLayer())
