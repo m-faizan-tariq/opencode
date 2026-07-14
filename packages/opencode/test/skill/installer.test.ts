@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Installer } from "../../src/skill/installer"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
@@ -8,7 +9,7 @@ import { tmpdir } from "../fixture/fixture"
 import path from "path"
 import fs from "fs/promises"
 
-const it = testEffect(Layer.mergeAll(FSUtil.defaultLayer, Global.layer))
+const it = testEffect(LayerNode.compile(LayerNode.group([FSUtil.node, Global.node])))
 
 const withHome = <A, E, R>(home: string, self: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
