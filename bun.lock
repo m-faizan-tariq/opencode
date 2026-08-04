@@ -559,7 +559,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.18.13",
+      "version": "1.18.13-fork",
       "bin": {
         "opencode": "./bin/opencode",
       },
