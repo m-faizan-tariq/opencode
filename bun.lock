@@ -560,7 +560,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.18.24",
+      "version": "1.18.16-fork",
       "bin": {
         "opencode": "./bin/opencode",
       },
