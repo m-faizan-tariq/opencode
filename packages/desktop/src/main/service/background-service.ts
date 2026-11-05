@@ -68,8 +68,13 @@ const ensure = Effect.fn("BackgroundService.ensure")(function* (mode: Background
         ...setup.cli.command,
         "serve",
         "--service",
-        ...(setup.isolated ? ["--hostname", "0.0.0.0", "--port", String(0x0c0c)] : []),
+        ...(setup.isDev
+          ? ["--hostname", "127.0.0.1", "--port", "49375"]
+          : setup.isolated
+            ? ["--hostname", "0.0.0.0", "--port", String(0x0c0c)]
+            : []),
       ],
+      env: setup.isolated ? { XDG_STATE_HOME: app.getPath("userData") } : undefined,
       onStart: (reason, previousVersion) =>
         runFork(Effect.logInfo("v2 CLI background service starting", { reason, previousVersion })),
     })
@@ -101,8 +106,9 @@ const prepare = Effect.fn("BackgroundService.prepare")(function* (mode: Backgrou
   yield* Effect.logInfo("starting v2 background service")
   const path = yield* Path.Path
   const desktopCli = yield* DesktopCli.Service
+  const isDev = CHANNEL === "dev"
   const reuse = !app.isPackaged && process.env.OPENCODE_DESKTOP_REUSE_SERVER === "1"
-  const isolated = !app.isPackaged && !reuse && process.env.OPENCODE_DESKTOP_ISOLATED_SERVER === "1"
+  const isolated = isDev || (!app.isPackaged && !reuse && process.env.OPENCODE_DESKTOP_ISOLATED_SERVER === "1")
   const cli = yield* desktopCli.resolve
   const version = reuse ? undefined : serviceVersion({ channel: CHANNEL, isolated, mode, version: cli.version })
 
@@ -119,9 +125,11 @@ const prepare = Effect.fn("BackgroundService.prepare")(function* (mode: Backgrou
           "opencode",
           "service-local.json",
         )
-      : undefined
+      : isDev
+        ? path.join(app.getPath("userData"), "opencode", "service.json")
+        : undefined
 
-  return { cli, client, file, isolated, version }
+  return { cli, client, file, isolated, version, isDev }
 })
 
 const adopt = Effect.fn("BackgroundService.adopt")(function* (

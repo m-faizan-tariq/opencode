@@ -1,7 +1,7 @@
 export * as DesktopCli from "./desktop-cli"
 
 import { execFile, spawn } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { promisify } from "node:util"
 import { app } from "electron"
 import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
@@ -150,9 +150,17 @@ const installCli = Effect.fn("DesktopCli.install")(function* (source: string, ve
   const destination = path.join(directory, executableName())
 
   if (existsSync(destination)) {
-    yield* Effect.logInfo("v2 CLI staged executable reused", { path: destination, version })
+    try {
+      const srcStat = statSync(source)
+      const dstStat = statSync(destination)
+      if (srcStat.size === dstStat.size && srcStat.mtimeMs <= dstStat.mtimeMs) {
+        yield* Effect.logInfo("v2 CLI staged executable reused", { path: destination, version })
 
-    return destination
+        return destination
+      }
+    } catch {
+      // Re-stage if stat check fails
+    }
   }
 
   const temp = destination + `.${process.pid}.tmp`
