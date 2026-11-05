@@ -267,6 +267,7 @@
         "@opencode/codemode": "workspace:*",
         "@opencode/plugin": "workspace:*",
         "@opencode/plugin-browser": "workspace:*",
+        "@opencode/plugin-kanban": "workspace:*",
         "@opencode/pty": "0.4.0",
         "@opencode/schema": "workspace:*",
         "@opencode/util": "workspace:*",
@@ -394,6 +395,7 @@
         "@opencode/client": "workspace:*",
         "@opencode/plugin": "workspace:*",
         "@opencode/plugin-browser": "workspace:*",
+        "@opencode/plugin-kanban": "workspace:*",
         "@opencode/schema": "workspace:*",
         "@opencode/session-ui": "workspace:*",
         "@opencode/ui": "workspace:*",
@@ -547,6 +549,21 @@
     },
     "packages/plugin-browser": {
       "name": "@opencode/plugin-browser",
+      "version": "2.2.5",
+      "dependencies": {
+        "@opencode/plugin": "workspace:*",
+        "@opencode/schema": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/plugin-kanban": {
+      "name": "@opencode/plugin-kanban",
       "version": "2.2.5",
       "dependencies": {
         "@opencode/plugin": "workspace:*",
@@ -1952,6 +1969,8 @@
     "@opencode/plugin-browser": ["@opencode/plugin-browser@workspace:packages/plugin-browser"],
 
     "@opencode/plugin-figma": ["@opencode/plugin-figma@workspace:packages/plugins/figma"],
+
+    "@opencode/plugin-kanban": ["@opencode/plugin-kanban@workspace:packages/plugin-kanban"],
 
     "@opencode/posts": ["@opencode/posts@workspace:packages/posts"],
 

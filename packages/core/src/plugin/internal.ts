@@ -98,7 +98,9 @@ import { WebSearchTool } from "../tool/plugin/websearch.js"
 import { WellKnown } from "../wellknown.js"
 import { WriteTool } from "../tool/plugin/write.js"
 import { AgentPlugin } from "./agent.js"
+import { PluginPromise } from "./promise.js"
 import BrowserPlugin from "@opencode/plugin-browser"
+import KanbanPlugin from "@opencode/plugin-kanban"
 import { CommandPlugin } from "./command.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
@@ -276,6 +278,7 @@ const pre = [
   SkillTool.Plugin,
   SubagentTool.Plugin,
   TodoTool.Plugin,
+  PluginPromise.fromPromise(KanbanPlugin),
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,
   WriteTool.Plugin,

@@ -1,0 +1,15 @@
+export default {
+  "tab.title": "Kanban",
+  "command.toggle": "Toggle Kanban",
+  "add.placeholder": "Add a task…",
+  "add.label": "Add",
+  "start.label": "Start",
+  "move.to": "Move to",
+  "remove.label": "Remove task",
+  "open.session": "Open session",
+  "column.backlog": "Backlog",
+  "column.todo": "To do",
+  "column.working": "Working",
+  "column.review": "Review",
+  "column.done": "Done",
+}

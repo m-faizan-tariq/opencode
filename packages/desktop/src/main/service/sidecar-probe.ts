@@ -16,7 +16,8 @@ export function startSidecarProbe() {
   const version = CHANNEL === "beta" ? undefined : bundledVersion()
 
   if (version === "") return
-  probe = import("@opencode/client/service").then(({ Service }) => Service.discover({ version })).catch(() => undefined)
+  const file = CHANNEL === "dev" ? path.join(app.getPath("userData"), "opencode", "service.json") : undefined
+  probe = import("@opencode/client/service").then(({ Service }) => Service.discover({ version, file })).catch(() => undefined)
 }
 
 /** The probe's result, once: a later connect must not adopt a service that may have exited since boot. */
