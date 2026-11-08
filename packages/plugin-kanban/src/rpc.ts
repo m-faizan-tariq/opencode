@@ -64,6 +64,8 @@ export const Definition = Rpc.define({
           title: Schema.String,
           description: Schema.optional(Schema.String),
           priority: Schema.optional(Priority),
+          status: Schema.optional(Status),
+          linkSessionID: Schema.optional(Schema.String),
         }),
       ),
       output: portable(Task),

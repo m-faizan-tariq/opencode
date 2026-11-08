@@ -181,6 +181,8 @@ export default Plugin.define({
           title: input.title,
           description: input.description,
           priority: input.priority,
+          status: input.status,
+          sessionID: input.linkSessionID,
         })
 
         await announce(directory)
