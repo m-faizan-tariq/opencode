@@ -484,8 +484,18 @@ export function TabNavItem(
         data-titlebar-tab-link
         aria-current={props.active ? "page" : undefined}
         href={props.href}
-        draggable={false}
+        draggable={!!props.session}
         onDragStart={(event) => {
+          if (props.session) {
+            const payload = JSON.stringify({
+              sessionID: props.session.id,
+              title: props.session.title || title() || "Untitled",
+            })
+            event.dataTransfer?.setData("application/x-opencode-session", payload)
+            event.dataTransfer?.setData("text/plain", props.session.id)
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove"
+            return
+          }
           event.preventDefault()
           event.stopPropagation()
         }}
@@ -677,6 +687,34 @@ export function TabNavItem(
                 {language.t("common.export")}…
               </Menu.Item>
               <SessionReadMenuItem server={props.server} session={props.session} />
+              <Show when={props.session}>
+                <Menu.Item
+                  onSelect={() => {
+                    const session = props.session
+                    if (!session) return
+                    const ctx = serverCtx()
+                    void ctx?.sdk.api.rpc
+                      .call({
+                        rpcID: "experimental.kanban",
+                        method: "add",
+                        input: {
+                          sessionID: session.id,
+                          title: session.title || "Untitled",
+                          status: "todo",
+                          linkSessionID: session.id,
+                        },
+                      })
+                      .catch((error: unknown) => {
+                        showToast({
+                          title: language.t("common.requestFailed"),
+                          description: error instanceof Error ? error.message : undefined,
+                        })
+                      })
+                  }}
+                >
+                  Add to Kanban
+                </Menu.Item>
+              </Show>
               <Show when={props.contextMenuExtra}>
                 {(extra) => (
                   <>

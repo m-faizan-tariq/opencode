@@ -285,7 +285,7 @@ export default function KanbanPanel(props: { session: MountedSession }) {
             data-column={column}
             onDragOver={(event) => {
               event.preventDefault()
-              if (event.dataTransfer) event.dataTransfer.dropEffect = "move"
+              if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
               setDragOverColumn(column)
             }}
             onDragLeave={() => {
@@ -293,9 +293,59 @@ export default function KanbanPanel(props: { session: MountedSession }) {
             }}
             onDrop={(event) => {
               event.preventDefault()
-              const id = event.dataTransfer?.getData("text/plain") || draggedId()
-              setDraggedId(undefined)
               setDragOverColumn(undefined)
+
+              const sessionPayload = event.dataTransfer?.getData("application/x-opencode-session")
+
+              if (sessionPayload) {
+                setDraggedId(undefined)
+                try {
+                  const parsed = JSON.parse(sessionPayload) as { sessionID?: string; title?: string }
+                  const sessionID = parsed.sessionID
+                  const title = parsed.title || "Untitled"
+                  if (sessionID) {
+                    const existing = board.tasks.find((t) => t.sessionID === sessionID)
+                    if (existing) {
+                      move(existing.id, column)
+                    } else {
+                      call((rpc, current) =>
+                        rpc.add({
+                          sessionID: current.id,
+                          title,
+                          status: column,
+                          linkSessionID: sessionID,
+                        }),
+                      )
+                    }
+                    return
+                  }
+                } catch {
+                  // Malformed payload: fall through to the task-move handling below.
+                }
+              }
+
+              const plain = event.dataTransfer?.getData("text/plain") || draggedId()
+
+              if (plain?.startsWith("ses_")) {
+                setDraggedId(undefined)
+                const existing = board.tasks.find((t) => t.sessionID === plain)
+                if (existing) {
+                  move(existing.id, column)
+                } else {
+                  call((rpc, current) =>
+                    rpc.add({
+                      sessionID: current.id,
+                      title: "Untitled",
+                      status: column,
+                      linkSessionID: plain,
+                    }),
+                  )
+                }
+                return
+              }
+
+              const id = plain
+              setDraggedId(undefined)
 
               if (id) move(id, column)
             }}
