@@ -8,6 +8,7 @@ import { handleEvent, onPrompt } from "./events"
 import { startTelegram } from "./telegram"
 import { workerPrompt } from "./worker"
 import { Definition as KanbanRpc } from "./rpc"
+import type { Priority, Status, Task } from "./rpc"
 
 /**
  * Active RPC event emitters across all `Location` instances in this process.
@@ -46,6 +47,168 @@ export function parseWorkerModel(value: string | undefined): { providerID: strin
   if (!value || slash === undefined || slash <= 0 || slash >= value.length - 1) return undefined
 
   return { providerID: value.slice(0, slash), id: value.slice(slash + 1) }
+}
+
+/**
+ * The session calls the add path makes, narrowed so a test harness can stub them.
+ *
+ * `ctx.session` satisfies this shape; the point of naming it is that `addRpcTask` can be
+ * exercised without standing up a plugin host.
+ */
+export interface AddRpcSession {
+  get(input: { sessionID: string }): Promise<unknown>
+  create(input: {
+    agent?: string
+    model?: { providerID: string; id: string }
+    title?: string
+    location?: { directory: string }
+  }): Promise<{ id: string }>
+  prompt(input: { sessionID: string; text: string }): Promise<unknown>
+  remove(input: { sessionID: string }): Promise<unknown>
+}
+
+export interface AddRpcDeps {
+  readonly store: BoardStore
+  /** The project directory the new card's board lives in. */
+  readonly directory: string
+  readonly session: AddRpcSession
+  /** From `KANBAN_WORKER_AGENT`; unset means inherit the caller's agent. */
+  readonly agent?: string
+  /** From `KANBAN_WORKER_MODEL`; unset means inherit the caller's model. */
+  readonly model?: { providerID: string; id: string }
+  readonly log?: (message: string) => void
+  readonly changed?: (directory: string) => Promise<void> | void
+}
+
+export interface AddRpcInput {
+  readonly sessionID: string
+  readonly title: string
+  readonly description?: string
+  readonly priority?: Priority
+  readonly status?: Status
+  readonly linkSessionID?: string
+}
+
+/**
+ * The `rpc.add` body, extracted so the add path is testable without a plugin host.
+ *
+ * `input.sessionID` names the *caller's* board; it is not the new card's session.
+ *
+ * Three shapes:
+ * - a card linked to an existing session (`linkSessionID`, from a drag or "Add to Kanban"):
+ *   the link is kept, and a `working` card prompts that session only when it has not run yet;
+ * - an explicit non-`working` status: the card is created in that column with no session;
+ * - the default add: the card is created in `working` and a worker session is created, linked,
+ *   and prompted. This is all-or-nothing — a session that cannot be created or prompted rolls
+ *   the card and the session back, so a card never exists without a door behind it.
+ */
+export async function addRpcTask(deps: AddRpcDeps, input: AddRpcInput): Promise<Task> {
+  if (input.linkSessionID) {
+    const { task } = deps.store.add(deps.directory, {
+      title: input.title,
+      description: input.description,
+      priority: input.priority,
+      status: input.status,
+      sessionID: input.linkSessionID,
+    })
+
+    // The linked session already exists, so a card that lands in `working` has to tell a fresh
+    // session from one the user has already talked to: prompting a session with history would
+    // send the worker a second brief for work already underway. A failure here is not fatal —
+    // the card is linked either way, and the user can start it by hand.
+    if (task.status === "working") {
+      try {
+        const info = (await deps.session.get({ sessionID: input.linkSessionID })) as { tokens?: { input?: number } }
+        if ((info?.tokens?.input ?? 0) === 0) {
+          await deps.session.prompt({
+            sessionID: input.linkSessionID,
+            text: workerPrompt([task.title, task.description].filter(Boolean).join("\n\n")),
+          })
+        }
+      } catch (error) {
+        deps.log?.(`kanban: could not prompt the linked session: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+
+    await deps.changed?.(deps.directory)
+
+    return deps.store.find(deps.directory, task.id) ?? task
+  }
+
+  if (input.status !== undefined && input.status !== "working") {
+    const { task } = deps.store.add(deps.directory, {
+      title: input.title,
+      description: input.description,
+      priority: input.priority,
+      status: input.status,
+    })
+
+    await deps.changed?.(deps.directory)
+
+    return task
+  }
+
+  // `store.add` validates the title before anything else, so a blank add throws without
+  // creating a session to clean up.
+  const { task } = deps.store.add(deps.directory, {
+    title: input.title,
+    description: input.description,
+    priority: input.priority,
+    status: "working",
+  })
+
+  let workerID: string | undefined
+
+  try {
+    let agent = deps.agent
+    let model = deps.model
+
+    if (!agent || !model) {
+      try {
+        const caller = (await deps.session.get({ sessionID: input.sessionID })) as {
+          agent?: unknown
+          model?: { providerID?: string; id?: string }
+        }
+        agent = agent ?? (caller.agent ? String(caller.agent) : undefined)
+        model = model ?? (caller.model ? { providerID: String(caller.model.providerID), id: String(caller.model.id) } : undefined)
+      } catch {
+        // The caller's session is unreachable; the session defaults apply.
+      }
+    }
+
+    const worker = await deps.session.create({
+      agent,
+      model,
+      title: task.title,
+      location: { directory: deps.directory },
+    })
+    workerID = worker.id
+
+    deps.store.update(deps.directory, task.id, { status: "working", sessionID: workerID })
+    await deps.session.prompt({ sessionID: workerID, text: workerPrompt([task.title, task.description].filter(Boolean).join("\n\n")) })
+    await deps.changed?.(deps.directory)
+
+    return deps.store.find(deps.directory, task.id) ?? task
+  } catch (error) {
+    // Best-effort: the original error is the one worth reporting, so a failure to clean up
+    // must not replace it. The session is removed first, because it is the thing this path
+    // created that the board has no handle on.
+    if (workerID) {
+      try {
+        await deps.session.remove({ sessionID: workerID })
+      } catch (cleanupError) {
+        deps.log?.(`kanban: could not remove the orphaned worker session: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`)
+      }
+    }
+
+    try {
+      deps.store.remove(deps.directory, task.id)
+    } catch (cleanupError) {
+      deps.log?.(`kanban: could not remove the rolled-back card: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`)
+    }
+
+    throw error
+  }
 }
 
 export default Plugin.define({
@@ -174,20 +337,7 @@ export default Plugin.define({
           }
         }
 
-        // `input.sessionID` names the *caller's* board; it is not the new card's session. Passing
-        // it through would link a card the panel added to the panel's own session, and the card
-        // would move to `working` the next time the user typed there.
-        const { task } = store.add(directory, {
-          title: input.title,
-          description: input.description,
-          priority: input.priority,
-          status: input.status,
-          sessionID: input.linkSessionID,
-        })
-
-        await announce(directory)
-
-        return task
+        return addRpcTask({ ...deps, directory }, input)
       },
       move: async (input) => {
         const directory = await store.directory(input.sessionID)
