@@ -19,6 +19,8 @@ export const Task = Schema.Struct({
   source: Source,
   sessionID: Schema.optional(Schema.String),
   result: Schema.optional(Schema.String),
+  /** The Telegram chat a capture came from, so a finished card can be reported back to it. */
+  telegramChatID: Schema.optional(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 })

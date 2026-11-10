@@ -22,6 +22,7 @@ export type NewTask = {
   readonly source?: Source
   readonly sessionID?: string
   readonly result?: string
+  readonly telegramChatID?: string
 }
 
 export type TaskUpdate = Partial<NewTask>
@@ -59,6 +60,7 @@ export function add(board: Board, input: NewTask): { board: Board; task: Task } 
     source: input.source ?? "manual",
     ...(input.sessionID !== undefined ? { sessionID: input.sessionID } : {}),
     ...(input.result !== undefined ? { result: input.result } : {}),
+    ...(input.telegramChatID !== undefined ? { telegramChatID: input.telegramChatID } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -203,7 +205,8 @@ function isTask(value: unknown): value is Task {
     typeof task.createdAt === "string" &&
     typeof task.updatedAt === "string" &&
     (task.result === undefined || typeof task.result === "string") &&
-    (task.sessionID === undefined || typeof task.sessionID === "string")
+    (task.sessionID === undefined || typeof task.sessionID === "string") &&
+    (task.telegramChatID === undefined || typeof task.telegramChatID === "string")
   )
 }
 

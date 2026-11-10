@@ -5,7 +5,9 @@ import { registerTools } from "./tools"
 import { registerCommands } from "./command"
 import { ingest } from "./ingest"
 import { handleEvent, onPrompt } from "./events"
-import { startTelegram } from "./telegram"
+import { maybeNotifyTelegramReview, startTelegram } from "./telegram"
+import { acquireTelegramLock, loadTelegramConfig } from "./telegram-config"
+import { prepareTelegramCapture } from "./media"
 import { workerPrompt } from "./worker"
 import { Definition as KanbanRpc } from "./rpc"
 import type { Priority, Status, Task } from "./rpc"
@@ -487,6 +489,18 @@ export default Plugin.define({
     await registerTools(ctx, { store, changed: announce })
     await registerCommands(ctx, deps)
 
+    // The Telegram bot is optional, and it has no session. It lands on the global board: `HOME`
+    // has no `.git`, so `resolvePath` falls through to `~/.opencode/kanban.json`. A literal `~`
+    // would be resolved against the server's cwd, which is the wrong board.
+    //
+    // The config is resolved here rather than from `process.env` directly so a short-lived CLI
+    // command and OpenCode Prod never read `~/.opencode/kanban-telegram.env` and poll the bot.
+    // `ownsTelegram` is declared before the event loop because the loop reads it when a card enters
+    // `review`; it is assigned by the Telegram block below before any event can arrive.
+    const tgConfig = loadTelegramConfig()
+    let ownsTelegram = false
+    let releaseTelegramLock: (() => void) | undefined
+
     // Drive card state from session events. The envelope carries `type` at the top level and the
     // fields the board reads under `data`, so the two are re-joined before the handler sees it.
     //
@@ -501,12 +515,24 @@ export default Plugin.define({
             if (!sessionID) continue
 
             const directory = await store.directory(sessionID)
+            // The card's prior status is what distinguishes a card *entering* `review` from one
+            // that is already there; a redelivered event must not notify twice.
+            const before = store.tasks(directory).find((item) => item.sessionID === sessionID)
 
             // `handleEvent` reports whether the event changed a linked task. The stream carries
             // every event in the server, so emitting unconditionally would have the panel re-read
             // on each unrelated text and tool call.
             if (handleEvent(store, directory, { ...data, type: envelope.type, sessionID })) {
               await announce(directory)
+
+              if (before) {
+                const after = store.find(directory, before.id) ?? before
+                void maybeNotifyTelegramReview(before, after, {
+                  token: tgConfig.token,
+                  ownsTelegram,
+                  log: (message) => console.error(message),
+                })
+              }
             }
           } catch (error) {
             // A malformed event, or a session that no longer resolves, must not end the loop.
@@ -540,38 +566,42 @@ export default Plugin.define({
       }
     })
 
-    // The Telegram bot is optional, and it has no session. It lands on the global board: `HOME`
-    // has no `.git`, so `resolvePath` falls through to `~/.opencode/kanban.json`. A literal `~`
-    // would be resolved against the server's cwd, which is the wrong board.
-    let ownsTelegram = false
-    if (process.env.KANBAN_TELEGRAM_TOKEN && !telegramStarted) {
-      telegramStarted = true
-      ownsTelegram = true
-      const allowed = new Set(
-        (process.env.KANBAN_TELEGRAM_CHATS ?? "")
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-      )
+    // The Telegram block below takes the lock and starts the poll loop. A second live poller
+    // would earn a 409 on every `getUpdates` and stall the bot, so the lock is what keeps this
+    // process out of the way when another one owns the bot.
+    if (tgConfig.token && !telegramStarted) {
+      const token = tgConfig.token
+      const lock = acquireTelegramLock(tgConfig.lockPath)
 
-      startTelegram(
-        {
-          token: process.env.KANBAN_TELEGRAM_TOKEN,
-          allowed,
-          log: (message) => console.error(message),
-          ingest: async (text) =>
-            ingest({ ...deps, directory: process.env.HOME || homedir() }, { text, source: "telegram" }),
-        },
-        controller.signal,
-      )
-    } else if (!process.env.KANBAN_TELEGRAM_TOKEN && !telegramStarted) {
+      if (!lock) {
+        telegramStarted = true
+        console.error("kanban: another process holds the Telegram lock; skipping the Telegram capture door")
+      } else {
+        telegramStarted = true
+        ownsTelegram = true
+        releaseTelegramLock = lock
+
+        startTelegram(
+          {
+            token,
+            allowed: tgConfig.chats,
+            log: (message) => console.error(message),
+            prepareCapture: (input) => prepareTelegramCapture(input, { token, groqApiKey: tgConfig.groqApiKey }),
+            ingest: async (text, chatID) =>
+              ingest({ ...deps, directory: process.env.HOME || homedir() }, { text, source: "telegram", telegramChatID: chatID }),
+          },
+          controller.signal,
+        )
+      }
+    } else if (!tgConfig.token && !telegramStarted) {
       telegramStarted = true
-      console.error("kanban: set KANBAN_TELEGRAM_TOKEN to enable the Telegram capture door")
+      console.error("kanban: set KANBAN_TELEGRAM_TOKEN (or configure ~/.opencode/kanban-telegram.env in OpenCode Dev) to enable the Telegram capture door")
     }
 
     return async () => {
       controller.abort()
       emitters.delete(emitLocal)
+      releaseTelegramLock?.()
       if (ownsTelegram) telegramStarted = false
 
       // Both disposals have to run. A rejecting `registration.dispose()` would otherwise skip
