@@ -75,12 +75,13 @@ export function parseNote(text: string): { title: string; description: string } 
  * an agent that does not exist), the card is removed again. A card with no `sessionID` is a
  * card with no door behind it, which breaks the rule that every card opens a session.
  */
-export async function ingest(deps: IngestDeps, input: { text: string; source: Source }) {
+export async function ingest(deps: IngestDeps, input: { text: string; source: Source; telegramChatID?: string }) {
   const { title, description } = parseNote(input.text)
   const { task } = deps.store.add(deps.directory, {
     title,
     description,
     source: input.source,
+    ...(input.telegramChatID !== undefined ? { telegramChatID: input.telegramChatID } : {}),
   })
 
   let sessionID: string | undefined

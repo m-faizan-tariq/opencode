@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { handleUpdate, startTelegram, type TelegramDeps, type TelegramUpdate } from "../src/telegram"
+import {
+  handleUpdate,
+  maybeNotifyTelegramReview,
+  sendTelegramMessage,
+  startTelegram,
+  type TelegramDeps,
+  type TelegramUpdate,
+} from "../src/telegram"
+import type { Task } from "../src/board"
 
 /**
  * `handleUpdate` talks to Telegram through the global `fetch`, so the tests replace it with a
@@ -14,6 +22,7 @@ interface Call {
 }
 
 let calls: Call[] = []
+let actions: string[] = []
 let handler: (url: string) => Response | Promise<Response> = () => new Response("{}", { status: 200 })
 
 function stubFetch() {
@@ -22,6 +31,10 @@ function stubFetch() {
 
     if (url.includes("/sendMessage")) {
       calls.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+    }
+
+    if (url.includes("/sendChatAction")) {
+      actions.push(String(JSON.parse(String(init?.body))["action"] ?? ""))
     }
 
     return handler(url)
@@ -35,6 +48,7 @@ function restoreFetch() {
 interface HarnessOptions {
   readonly allowed?: ReadonlySet<string>
   readonly ingestThrows?: boolean
+  readonly prepareCapture?: TelegramDeps["prepareCapture"]
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -51,6 +65,7 @@ function harness(options: HarnessOptions = {}) {
       return { id: "k_abc123", title: "Buy milk" }
     },
     log: (message: string) => logged.push(message),
+    prepareCapture: options.prepareCapture,
   }
 
   return { deps, ingested, logged }
@@ -64,8 +79,27 @@ function sentTexts() {
   return calls.map((call) => String(call.body["text"] ?? ""))
 }
 
+function sentActions() {
+  return actions.slice()
+}
+
+function task(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "k_1",
+    title: "Task",
+    description: "",
+    status: "working",
+    priority: "med",
+    source: "telegram",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  }
+}
+
 afterEach(() => {
   calls = []
+  actions = []
   handler = () => new Response("{}", { status: 200 })
   restoreFetch()
 })
@@ -217,6 +251,103 @@ describe("handleUpdate", () => {
     await handleUpdate(deps, update("Buy milk", 777))
 
     expect(logged.some((line) => line.includes("777"))).toBe(true)
+  })
+
+  test("a caption and a video attachment route through prepareCapture", async () => {
+    stubFetch()
+    const { deps, ingested } = harness({
+      prepareCapture: async (input) => ({ text: `prepared:${input.caption}:${input.media?.kind}`, media: true }),
+    })
+
+    const offset = await handleUpdate(deps, {
+      update_id: 7,
+      message: {
+        caption: "look at this",
+        video: { file_id: "v1", file_name: "clip.mp4", mime_type: "video/mp4" },
+        chat: { id: 123 },
+      },
+    })
+
+    expect(ingested).toEqual(["prepared:look at this:video"])
+    expect(offset).toBe(8)
+    expect(sentActions()).toContain("typing")
+  })
+
+  test("a caption and a voice attachment route through prepareCapture", async () => {
+    stubFetch()
+    const { deps, ingested } = harness({
+      prepareCapture: async (input) => ({ text: `prepared:${input.media?.kind}`, media: true }),
+    })
+
+    await handleUpdate(deps, {
+      update_id: 7,
+      message: {
+        caption: "voice note",
+        voice: { file_id: "a1", file_name: "voice.ogg", mime_type: "audio/ogg" },
+        chat: { id: 123 },
+      },
+    })
+
+    expect(ingested).toEqual(["prepared:voice"])
+    expect(sentActions()).toContain("typing")
+  })
+
+  test("a caption and a video document route through prepareCapture", async () => {
+    stubFetch()
+    const { deps, ingested } = harness({
+      prepareCapture: async (input) => ({ text: `prepared:${input.media?.kind}`, media: true }),
+    })
+
+    await handleUpdate(deps, {
+      update_id: 7,
+      message: {
+        caption: "clip",
+        document: { file_id: "d1", file_name: "clip.mp4", mime_type: "video/mp4" },
+        chat: { id: 123 },
+      },
+    })
+
+    expect(ingested).toEqual(["prepared:document"])
+    expect(sentActions()).toContain("typing")
+  })
+
+  test("a captionless pdf document is skipped without a reply", async () => {
+    stubFetch()
+    const { deps, ingested } = harness({
+      prepareCapture: async () => ({ text: "must not run", media: false }),
+    })
+
+    // A PDF is not audio or video, so the media pipeline cannot transcribe it and the message
+    // carries no text either. It is not a task, and answering it would be noise.
+    const offset = await handleUpdate(deps, {
+      update_id: 7,
+      message: {
+        document: { file_id: "d1", file_name: "report.pdf", mime_type: "application/pdf" },
+        chat: { id: 123 },
+      },
+    })
+
+    expect(offset).toBe(8)
+    expect(ingested).toEqual([])
+    expect(sentTexts()).toHaveLength(0)
+  })
+
+  test("a prepareCapture rejection is logged and the update is still acked", async () => {
+    stubFetch()
+    const { deps, ingested, logged } = harness({
+      prepareCapture: async () => {
+        throw new Error("capture exploded")
+      },
+    })
+
+    // `prepareCapture` is inside the ack's try, so an unexpected rejection logs and still advances
+    // the offset. A throw here would stall the poll on this update forever.
+    const offset = await handleUpdate(deps, update("Buy milk"))
+
+    expect(offset).toBe(8)
+    expect(ingested).toEqual([])
+    expect(sentTexts()).toHaveLength(0)
+    expect(logged.some((line) => line.includes("capture exploded"))).toBe(true)
   })
 })
 
@@ -377,5 +508,205 @@ describe("startTelegram", () => {
 
     expect(offsets[0]).toBe("0")
     expect(offsets[1]).toBe("6")
+  })
+
+  test("a 409 conflict re-arms on a 10s backoff", async () => {
+    stubFetch()
+    handler = () => new Response("{}", { status: 409 })
+    const { deps, logged } = harness()
+    const delays: number[] = []
+
+    // A 409 means another poller owns the bot. Retrying every second keeps the conflict alive, so
+    // the loop backs off for 10s instead.
+    const controller = new AbortController()
+    startTelegram({ ...deps, schedule: (_callback, ms) => delays.push(ms) }, controller.signal)
+
+    for (let i = 0; i < 200 && delays.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    controller.abort()
+
+    expect(delays).toContain(10_000)
+    expect(logged.some((line) => line.includes("409"))).toBe(true)
+  })
+
+  test("a healthy poll re-arms on the 1s backoff", async () => {
+    stubFetch()
+    handler = (url) => {
+      if (url.includes("/getUpdates")) return new Response(JSON.stringify({ result: [] }), { status: 200 })
+      return new Response("{}", { status: 200 })
+    }
+    const { deps } = harness()
+    const delays: number[] = []
+
+    const controller = new AbortController()
+    startTelegram({ ...deps, schedule: (_callback, ms) => delays.push(ms) }, controller.signal)
+
+    for (let i = 0; i < 200 && delays.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    controller.abort()
+
+    expect(delays).toContain(1_000)
+  })
+})
+
+describe("sendTelegramMessage", () => {
+  test("splits a long message on a newline boundary", async () => {
+    const sent: string[] = []
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(String(JSON.parse(String(init?.body))["text"]))
+      return new Response("{}", { status: 200 })
+    }) as typeof fetch
+
+    const line = "a".repeat(2000)
+    const text = `${line}\n${line}\n${line}`
+
+    await sendTelegramMessage("token", "123", text, fetchImpl)
+
+    expect(sent).toHaveLength(3)
+    expect(sent.every((chunk) => chunk.length <= 3900)).toBe(true)
+    expect(sent.join("\n")).toBe(text)
+  })
+
+  test("splits a long message on a space boundary when there is no newline", async () => {
+    const sent: string[] = []
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(String(JSON.parse(String(init?.body))["text"]))
+      return new Response("{}", { status: 200 })
+    }) as typeof fetch
+
+    const text = Array.from({ length: 1000 }, () => "word").join(" ")
+
+    await sendTelegramMessage("token", "123", text, fetchImpl)
+
+    expect(sent.length).toBeGreaterThan(1)
+    expect(sent.every((chunk) => chunk.length <= 3900)).toBe(true)
+    expect(sent.join(" ")).toBe(text)
+  })
+
+  test("throws on a non-2xx response", async () => {
+    const fetchImpl = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch
+
+    let message = ""
+    try {
+      await sendTelegramMessage("token", "123", "hello", fetchImpl)
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain("500")
+  })
+})
+
+describe("maybeNotifyTelegramReview", () => {
+  function before(overrides: Partial<Task> = {}): Task {
+    return task({ status: "working", source: "telegram", telegramChatID: "123", ...overrides })
+  }
+
+  function after(overrides: Partial<Task> = {}): Task {
+    return task({ status: "review", source: "telegram", telegramChatID: "123", result: "The report", ...overrides })
+  }
+
+  function recorder() {
+    const sent: Array<{ token: string; chatID: string; text: string }> = []
+    return {
+      sent,
+      send: async (token: string, chatID: string, text: string) => {
+        sent.push({ token, chatID, text })
+      },
+    }
+  }
+
+  test("sends a formatted summary when a telegram card enters review", async () => {
+    const { send, sent } = recorder()
+
+    await maybeNotifyTelegramReview(before(), after(), { token: "tok", ownsTelegram: true, log: () => {}, send })
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.token).toBe("tok")
+    expect(sent[0]?.chatID).toBe("123")
+    expect(sent[0]?.text).toContain("✅ Kanban task finished")
+    expect(sent[0]?.text).toContain("Task")
+    expect(sent[0]?.text).toContain("The report")
+  })
+
+  test("does nothing when this process does not own telegram", async () => {
+    const { send, sent } = recorder()
+
+    const result = await maybeNotifyTelegramReview(before(), after(), { token: "tok", ownsTelegram: false, log: () => {}, send })
+
+    expect(result).toBeUndefined()
+    expect(sent).toHaveLength(0)
+  })
+
+  test("does nothing without a token", async () => {
+    const { send, sent } = recorder()
+
+    const result = await maybeNotifyTelegramReview(before(), after(), { token: undefined, ownsTelegram: true, log: () => {}, send })
+
+    expect(result).toBeUndefined()
+    expect(sent).toHaveLength(0)
+  })
+
+  test("does nothing when the card was already in review", async () => {
+    const { send, sent } = recorder()
+
+    const result = await maybeNotifyTelegramReview(before({ status: "review" }), after(), {
+      token: "tok",
+      ownsTelegram: true,
+      log: () => {},
+      send,
+    })
+
+    // A redelivered event must not notify twice.
+    expect(result).toBeUndefined()
+    expect(sent).toHaveLength(0)
+  })
+
+  test("does nothing for a non-telegram card with no chat id", async () => {
+    const { send, sent } = recorder()
+
+    const result = await maybeNotifyTelegramReview(
+      before({ source: "manual", telegramChatID: undefined }),
+      after({ source: "manual", telegramChatID: undefined }),
+      { token: "tok", ownsTelegram: true, log: () => {}, send },
+    )
+
+    expect(result).toBeUndefined()
+    expect(sent).toHaveLength(0)
+  })
+
+  test("does nothing for a telegram card with no chat id", async () => {
+    const { send, sent } = recorder()
+
+    const result = await maybeNotifyTelegramReview(
+      before({ telegramChatID: undefined }),
+      after({ telegramChatID: undefined }),
+      { token: "tok", ownsTelegram: true, log: () => {}, send },
+    )
+
+    expect(result).toBeUndefined()
+    expect(sent).toHaveLength(0)
+  })
+
+  test("logs without rejecting when the send fails", async () => {
+    const logged: string[] = []
+
+    const result = await maybeNotifyTelegramReview(before(), after(), {
+      token: "tok",
+      ownsTelegram: true,
+      log: (message) => logged.push(message),
+      send: async () => {
+        throw new Error("network down")
+      },
+    })
+
+    // The caller fires this promise without awaiting it, so a notification failure must never
+    // surface as a rejection.
+    expect(result).toBeUndefined()
+    expect(logged.some((line) => line.includes("network down"))).toBe(true)
   })
 })

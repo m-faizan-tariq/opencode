@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { handleEvent, onPrompt } from "../src/events"
+import { ingest } from "../src/ingest"
 import { BoardStore } from "../src/store"
 
 /**
@@ -197,6 +198,40 @@ describe("session events", () => {
       // A fresh store has to see the review status, which proves the write was persisted
       // rather than only held in this instance's cache.
       expect(new BoardStore().find(dir, task.id)?.status).toBe("review")
+    } finally {
+      cleanup(dir)
+    }
+  })
+
+  test("a telegram chat id persists across a reload and the review transition", async () => {
+    const dir = temp()
+
+    try {
+      const store = new BoardStore()
+      const task = await ingest(
+        {
+          store,
+          directory: dir,
+          session: {
+            create: async () => ({ id: "ses_worker" }),
+            prompt: async () => undefined,
+            remove: async () => undefined,
+          },
+        },
+        { text: "Telegram task", source: "telegram", telegramChatID: "123" },
+      )
+
+      // `reload` re-reads the file, so this proves the chat id was written rather than only held
+      // in the instance's cache.
+      const persisted = store.reload(dir).tasks.find((item) => item.id === task.id)
+      expect(persisted?.source).toBe("telegram")
+      expect(persisted?.telegramChatID).toBe("123")
+
+      handleEvent(store, dir, { type: "session.execution.succeeded", sessionID: "ses_worker" })
+
+      const reviewed = store.find(dir, task.id)
+      expect(reviewed?.status).toBe("review")
+      expect(reviewed?.telegramChatID).toBe("123")
     } finally {
       cleanup(dir)
     }
