@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@opencode/plugin-kanban",
-  "version": "2.2.5",
+  "version": "2.3.0",
   "description": "A persistent Kanban board with capture-to-review pipeline",
   "type": "module",
   "license": "MIT",
