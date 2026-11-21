@@ -8,12 +8,10 @@ import { BuiltinPanel, onIdle, type BuiltinPanelTab } from "@opencode/plugin/gui
 import type definition from "./index"
 
 const TAB = "board"
+
 const KEY = `kanban:${TAB}`
 
 const setup: Plugin.Setup<typeof definition> = (ctx) => {
-  // The board is a desktop feature: the phone reaches the same cards through Telegram and `/note`.
-  if (ctx.app.platform !== "desktop") return
-
   const Board = lazy(() => import("./panel"))
   // Compile the panel while the app idles, so the first open renders at once.
   onCleanup(onIdle(() => void Board.preload()))
@@ -38,6 +36,15 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
   ctx.add(BuiltinPanel, {
     id: TAB,
     region: "side",
+    mobile: {
+      get title() {
+        return ctx.t("tab.title")
+      },
+      order: 15,
+      kind: "tab",
+      icon: "grid-plus",
+      cached: true,
+    },
     list: (input) => (input.open.includes(TAB) ? [tab] : []),
     closed: () => ({ title: ctx.t("tab.title"), icon: "grid-plus" as const }),
     render: (props) => (
@@ -58,17 +65,21 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
       section: "session",
       bind: "mod+shift+k",
       editable: true,
-      enabled: routed() && !layout.narrow(),
+      enabled: routed(),
       run() {
         const session = sessions.current()
+
         if (!session) return
-        layout.toggle(KEY, session)
+
+        if (layout.narrow()) layout.open(KEY, session)
+        else layout.toggle(KEY, session)
       },
     }),
   )
 
   ctx.add(MenuItem, (): MenuItem | undefined => {
     const session = sessions.current()
+
     if (!session || layout.narrow()) return undefined
 
     return {

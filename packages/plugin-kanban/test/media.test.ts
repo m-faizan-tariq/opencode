@@ -4,8 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   extractUrls,
+  MEDIA_TIMEOUT_MS,
   parseYouTubeId,
   prepareTelegramCapture,
+  resolveBin,
   TELEGRAM_DOWNLOAD_LIMIT,
   TRANSCRIPT_LIMIT,
   transcribeAudioWithGroq,
@@ -32,6 +34,10 @@ interface HarnessOptions {
   readonly ytDlpError?: boolean
   /** The HTTP status the Groq transcription endpoint answers with. */
   readonly groqStatus?: number
+  /** Whether `ffprobe` reports an audio stream; defaults to yes. */
+  readonly ffprobeAudio?: boolean
+  /** Makes the `ffprobe` call reject, as a missing binary would. */
+  readonly ffprobeError?: boolean
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -41,6 +47,11 @@ function harness(options: HarnessOptions = {}) {
 
   const execFile: ExecFileFn = async (file, args) => {
     calls.push({ file, args })
+
+    if (file.endsWith("ffprobe")) {
+      if (options.ffprobeError) throw new Error("ffprobe unavailable")
+      return { stdout: options.ffprobeAudio === false ? "" : "audio\n", stderr: "" }
+    }
 
     if (file.endsWith("ffmpeg")) {
       const output = args[args.length - 1]!
@@ -201,6 +212,16 @@ describe("parseYouTubeId", () => {
   })
 })
 
+describe("media pipeline constants", () => {
+  test("the download timeout leaves a large video room to finish", () => {
+    expect(MEDIA_TIMEOUT_MS).toBe(45_000)
+  })
+
+  test("resolveBin falls back to the bare name when no well-known dir holds it", () => {
+    expect(resolveBin("kanban-definitely-missing-binary")).toBe("kanban-definitely-missing-binary")
+  })
+})
+
 describe("prepareTelegramCapture", () => {
   test("plain text passes through unchanged", async () => {
     const { deps } = harness()
@@ -318,12 +339,122 @@ describe("prepareTelegramCapture", () => {
     }
   })
 
+  test("a bare url that cannot be fetched is kept as source content", async () => {
+    const { deps, dirs } = harness()
+    try {
+      const result = await prepareTelegramCapture({ text: "https://example.com/blog" }, deps)
+
+      expect(result.text).toContain("https://example.com/blog")
+      expect(result.text).toContain("[Source content")
+    } finally {
+      cleanup(dirs)
+    }
+  })
+
   test("a social url invokes yt-dlp", async () => {
     const { deps, calls, dirs } = harness()
     try {
       await prepareTelegramCapture({ text: "https://www.tiktok.com/@user/video/123" }, deps)
 
       expect(calls.some((call) => call.file.endsWith("yt-dlp"))).toBe(true)
+    } finally {
+      cleanup(dirs)
+    }
+  })
+
+  test("short social hosts invoke yt-dlp", async () => {
+    const { deps, calls, dirs } = harness()
+    const urls = [
+      "https://vm.tiktok.com/abc",
+      "https://vt.tiktok.com/abc",
+      "https://instagr.am/abc",
+      "https://lnkd.in/abc",
+      "https://t.co/abc",
+      "https://l.facebook.com/abc",
+      "https://redd.it/abc",
+    ]
+
+    try {
+      let invoked = 0
+
+      for (const url of urls) {
+        const before = calls.length
+        await prepareTelegramCapture({ text: url }, deps)
+        if (calls.slice(before).some((call) => call.file.endsWith("yt-dlp"))) invoked += 1
+      }
+
+      expect(invoked).toBe(urls.length)
+    } finally {
+      cleanup(dirs)
+    }
+  })
+
+  test("yt-dlp calls pass the resolved ffmpeg, node runtime, and cookies file", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "kanban-bin-"))
+    const cookies = join(binDir, "cookies.txt")
+    writeFileSync(cookies, "# cookies")
+    writeFileSync(join(binDir, "ffmpeg"), "#!/bin/sh\n")
+    writeFileSync(join(binDir, "node"), "#!/bin/sh\n")
+
+    const previousCookies = process.env.KANBAN_YT_DLP_COOKIES
+    process.env.KANBAN_YT_DLP_COOKIES = cookies
+
+    const base = harness({ transcript: "" })
+    const deps: PrepareDeps = { ...base.deps, resolveBin: (name) => join(binDir, name) }
+
+    try {
+      await prepareTelegramCapture({ text: "https://youtu.be/dQw4w9WgXcQ" }, deps)
+
+      const ytDlpCalls = base.calls.filter((call) => call.file.endsWith("yt-dlp"))
+      expect(ytDlpCalls.length).toBeGreaterThan(0)
+
+      for (const call of ytDlpCalls) {
+        expect(call.args).toContain("--ffmpeg-location")
+        expect(call.args).toContain(join(binDir, "ffmpeg"))
+        expect(call.args).toContain("--js-runtimes")
+        expect(call.args).toContain(`node:${join(binDir, "node")}`)
+        expect(call.args).toContain("--cookies")
+        expect(call.args).toContain(cookies)
+      }
+
+      const download = ytDlpCalls.find((call) => call.args.includes("-x"))
+      expect(download?.args).toContain("-f")
+      expect(download?.args).toContain("ba/b")
+      expect(download?.args).toContain("200m")
+      expect(download?.args).not.toContain("24m")
+    } finally {
+      if (previousCookies === undefined) delete process.env.KANBAN_YT_DLP_COOKIES
+      else process.env.KANBAN_YT_DLP_COOKIES = previousCookies
+      cleanup(base.dirs)
+      rmSync(binDir, { recursive: true, force: true })
+    }
+  })
+
+  test("a video with no audio track is reported instead of reaching ffmpeg", async () => {
+    const { deps, calls, dirs } = harness({ ffprobeAudio: false })
+    try {
+      const result = await prepareTelegramCapture(
+        { text: "watch this", media: { kind: "video", file_id: "f1", file_name: "clip.mp4", mime_type: "video/mp4", file_size: 1000 } },
+        deps,
+      )
+
+      expect(result.text).toContain("Video has no audio track to transcribe.")
+      expect(calls.some((call) => call.file.endsWith("ffmpeg"))).toBe(false)
+    } finally {
+      cleanup(dirs)
+    }
+  })
+
+  test("an ffprobe failure still attempts ffmpeg extraction", async () => {
+    const { deps, calls, dirs } = harness({ transcript: "recovered", ffprobeError: true })
+    try {
+      const result = await prepareTelegramCapture(
+        { text: "watch this", media: { kind: "video", file_id: "f1", file_name: "clip.mp4", mime_type: "video/mp4", file_size: 1000 } },
+        deps,
+      )
+
+      expect(result.text).toContain("recovered")
+      expect(calls.some((call) => call.file.endsWith("ffmpeg"))).toBe(true)
     } finally {
       cleanup(dirs)
     }

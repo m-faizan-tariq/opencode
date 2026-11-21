@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { promisify } from "node:util"
 
@@ -9,9 +9,9 @@ const execFileAsync = promisify(execFile)
 export const TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024
 export const GROQ_UPLOAD_LIMIT = 25 * 1024 * 1024
 export const TRANSCRIPT_LIMIT = 12_000
-export const MEDIA_TIMEOUT_MS = 15_000
+export const MEDIA_TIMEOUT_MS = 45_000
 
-const BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+const BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", join(homedir(), ".local", "bin"), join(homedir(), ".bun", "bin")]
 
 /**
  * Resolves a system binary by absolute path first, then falls back to `PATH`.
@@ -144,6 +144,13 @@ const SOCIAL_HOSTS = [
   "fb.watch",
   "facebook.com",
   "reddit.com",
+  "vm.tiktok.com",
+  "vt.tiktok.com",
+  "instagr.am",
+  "lnkd.in",
+  "t.co",
+  "l.facebook.com",
+  "redd.it",
 ]
 
 /** True when the attachment is one the pipeline can download and transcribe. */
@@ -262,6 +269,11 @@ function buildCaptureText(params: {
 
   if (params.sourceContent) {
     lines.push("", SOURCE_CONTENT_HEADER, params.sourceContent)
+  } else if ((params.hadMedia || params.hadUrl) && trimmed) {
+    // The attachment or link could not be fetched; keep the raw text so the worker can still act.
+    // Without this, a bare link to a non-YouTube / non-social site is replaced by
+    // "[Video] media" and the URL is lost, leaving an unactionable card.
+    lines.push("", SOURCE_CONTENT_HEADER, trimmed.slice(0, 1_000))
   }
 
   if (career) {
@@ -298,6 +310,44 @@ async function downloadToPath(
 
 async function runFfmpeg(exec: ExecFileFn, resolve: (name: string) => string, inputPath: string, outputPath: string): Promise<void> {
   await exec(resolve("ffmpeg"), ["-y", "-i", inputPath, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", outputPath], { timeout: 120_000 })
+}
+
+/**
+ * The `yt-dlp` flags that depend on the local machine: an explicit ffmpeg and Node runtime, and
+ * the cookies file when `KANBAN_YT_DLP_COOKIES` points at one. A bare name is only used when the
+ * well-known prefixes actually hold the binary, so the call never points yt-dlp at a path that
+ * does not exist.
+ */
+function ytDlpEnvArgs(resolve: (name: string) => string): string[] {
+  const args: string[] = []
+
+  const ffmpeg = resolve("ffmpeg")
+  if (existsSync(ffmpeg)) args.push("--ffmpeg-location", ffmpeg)
+
+  const node = resolve("node")
+  if (existsSync(node)) args.push("--js-runtimes", `node:${node}`)
+
+  const cookies = process.env.KANBAN_YT_DLP_COOKIES
+  if (cookies && existsSync(cookies)) args.push("--cookies", cookies)
+
+  return args
+}
+
+/**
+ * True when `ffprobe` reports an audio stream. `undefined` means the probe itself failed, so the
+ * caller still attempts extraction rather than rejecting media that ffmpeg could handle.
+ */
+async function hasAudioStream(exec: ExecFileFn, resolve: (name: string) => string, inputPath: string): Promise<boolean | undefined> {
+  try {
+    const { stdout } = await exec(
+      resolve("ffprobe"),
+      ["-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", inputPath],
+      { timeout: MEDIA_TIMEOUT_MS },
+    )
+    return stdout.split(/\r?\n/u).some((line) => line.trim() === "audio")
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -350,7 +400,22 @@ async function downloadAudio(exec: ExecFileFn, resolve: (name: string) => string
   try {
     await exec(
       resolve("yt-dlp"),
-      ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-ac 1 -ar 16000 -b:a 48k", "--max-filesize", "24m", "--no-playlist", "-o", join(dir, "audio.%(ext)s"), url],
+      [
+        ...ytDlpEnvArgs(resolve),
+        "-x",
+        "--audio-format",
+        "mp3",
+        "-f",
+        "ba/b",
+        "--postprocessor-args",
+        "ffmpeg:-ac 1 -ar 16000 -b:a 48k",
+        "--max-filesize",
+        "200m",
+        "--no-playlist",
+        "-o",
+        join(dir, "audio.%(ext)s"),
+        url,
+      ],
       { timeout: 180_000, maxBuffer: 32 * 1024 * 1024 },
     )
   } catch {
@@ -389,7 +454,11 @@ async function captureTelegramMedia(media: TelegramMediaInput, deps: PrepareDeps
       const needsExtraction = media.kind === "video" || media.kind === "video_note" || media.kind === "voice" || !directAudio || inputSize > 4 * 1024 * 1024
 
       const audioPath = needsExtraction ? join(dir, "audio.mp3") : inputPath
-      if (needsExtraction) await runFfmpeg(exec, resolve, inputPath, audioPath)
+      if (needsExtraction) {
+        // A video without an audio track makes ffmpeg exit 234; the card should say so instead.
+        if ((await hasAudioStream(exec, resolve, inputPath)) === false) return "Video has no audio track to transcribe."
+        await runFfmpeg(exec, resolve, inputPath, audioPath)
+      }
 
       if (stat(audioPath).size > GROQ_UPLOAD_LIMIT) {
         return `The extracted audio is ${formatSize(stat(audioPath).size)}, over the 25 MB Groq upload limit. Send a shorter clip.`
@@ -423,7 +492,7 @@ async function captureYouTube(url: string, videoID: string, deps: PrepareDeps): 
 
   let metadata: { title?: string; uploader?: string } | undefined
   try {
-    const { stdout } = await exec(resolve("yt-dlp"), ["--dump-single-json", "--no-playlist", "--skip-download", url], {
+    const { stdout } = await exec(resolve("yt-dlp"), [...ytDlpEnvArgs(resolve), "--dump-single-json", "--no-playlist", "--skip-download", url], {
       timeout: MEDIA_TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
     })
@@ -480,7 +549,7 @@ async function captureGenericMedia(url: string, deps: PrepareDeps): Promise<Capt
 
   let metadata: { title?: string; uploader?: string } | undefined
   try {
-    const { stdout } = await exec(resolve("yt-dlp"), ["--dump-single-json", "--no-playlist", "--skip-download", url], {
+    const { stdout } = await exec(resolve("yt-dlp"), [...ytDlpEnvArgs(resolve), "--dump-single-json", "--no-playlist", "--skip-download", url], {
       timeout: MEDIA_TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
     })
