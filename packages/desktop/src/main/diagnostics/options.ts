@@ -1,7 +1,9 @@
 import { debugBuild } from "@opencode/gui-plugins/debug/options"
 
 export function debuggingSwitches(build: { packaged: boolean; channel: string }, env: string | undefined, port: string | undefined, pipe: boolean) {
-  if (!debugBuild(build)) return { port: undefined, pipe: false }
+  // A port named on the command line is honored even outside a debug build: the Dev app is launched with
+  // `--remote-debugging-port=65321` for live CDP verification, and stripping it would silently disable that.
+  if (!debugBuild(build)) return { port, pipe }
 
   return { port: remoteDebuggingPort(build, env) ?? port, pipe }
 }
